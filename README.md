@@ -1,1 +1,1 @@
-# solana_ticket
+# solana_ticket test project
