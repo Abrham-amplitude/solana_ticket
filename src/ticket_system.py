@@ -10,11 +10,36 @@ from datetime import datetime
 
 class TicketSystem:
     def __init__(self, rpc_url="https://api.devnet.solana.com"):
-        self.client = AsyncClient(rpc_url)
+        self.client = AsyncClient(rpc_url, commitment="confirmed")
         
+    async def check_wallet_balance(self, pubkey: Pubkey):
+        """Check if wallet has enough SOL"""
+        try:
+            balance_response = await self.client.get_balance(pubkey)
+            balance = balance_response.value
+            return balance
+        except Exception as e:
+            print(f"Error checking balance: {e}")
+            return 0
+            
     async def create_ticket(self, owner: Keypair, price: int):
         """Create a new ticket"""
         try:
+            # Check wallet balance first
+            balance = await self.check_wallet_balance(owner.pubkey())
+            if balance == 0:
+                return {
+                    "success": False,
+                    "error": "Wallet has 0 SOL. Please airdrop some SOL first using: solana airdrop 2 " + str(owner.pubkey()) + " --url devnet"
+                }
+            
+            # Make sure wallet has enough SOL
+            if balance < price + 1000000:  # price + 0.001 SOL for fees
+                return {
+                    "success": False,
+                    "error": f"Insufficient balance. Wallet has {balance/1000000000} SOL, needs at least {(price + 1000000)/1000000000} SOL"
+                }
+            
             # Create ticket account
             ticket_account = Keypair()
             
@@ -23,9 +48,9 @@ class TicketSystem:
             
             # Get minimum balance for rent exemption
             min_balance_resp = await self.client.get_minimum_balance_for_rent_exemption(TICKET_SPACE)
-            min_balance = min_balance_resp.value  # Access the value property
+            min_balance = min_balance_resp.value
             
-            # Create transfer instruction for rent
+            # Create transfer instruction for ticket price
             transfer_ix = transfer(
                 TransferParams(
                     from_pubkey=owner.pubkey(),
@@ -34,26 +59,19 @@ class TicketSystem:
                 )
             )
             
-            # Pack ticket data
-            ticket_data = struct.pack(
-                "<Q32sQB",
-                int(datetime.now().timestamp()),  # ticket_id
-                bytes(owner.pubkey()),           # owner
-                price,                          # price
-                0                               # is_used (False)
-            )
-            
             # Create transaction
             transaction = Transaction()
             transaction.add(transfer_ix)
             
-            # Send and confirm transaction
+            # Get recent blockhash
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
+            # Send transaction with proper options
             result = await self.client.send_transaction(
                 transaction,
-                owner,
+                [owner],  # List of signers
+                opts={"skip_confirmation": False}  # Wait for confirmation
             )
             
             return {
@@ -68,7 +86,10 @@ class TicketSystem:
             }
             
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": f"Failed to create ticket: {str(e)}. Make sure you have enough SOL in your wallet."
+            }
     
     async def verify_ticket(self, ticket_pubkey: Pubkey) -> dict:
         """Verify if a ticket is valid and unused"""
@@ -95,7 +116,7 @@ class TicketSystem:
             if not verify_result["valid"]:
                 return {"success": False, "error": "Invalid ticket"}
             
-            # Create transfer instruction to mark as used
+            # Create transfer instruction
             transfer_ix = transfer(
                 TransferParams(
                     from_pubkey=ticket_pubkey,
@@ -104,16 +125,19 @@ class TicketSystem:
                 )
             )
             
-            # Create and send transaction
+            # Create transaction
             transaction = Transaction()
             transaction.add(transfer_ix)
             
+            # Get recent blockhash
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
+            # Send transaction with proper options
             result = await self.client.send_transaction(
                 transaction,
-                user
+                [user],  # List of signers
+                opts={"skip_confirmation": False}  # Wait for confirmation
             )
             
             return {"success": True, "transaction_id": result.value}
