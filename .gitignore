@@ -1,5 +1,14 @@
-/dist
-/build
-/venv
-/env
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
 
