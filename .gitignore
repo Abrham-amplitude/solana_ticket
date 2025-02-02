@@ -11,4 +11,14 @@ venv/
 
 # Environment
 .env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Build
+dist/
+build/
+*.egg-info/
 

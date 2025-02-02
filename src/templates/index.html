@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solana Ticketing Assistant</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+      <h1 class="text-3xl font-bold text-center mb-8">
+        Solana Ticketing Assistant
+      </h1>
+
+      <!-- Main content grid -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Left sidebar with guides -->
+        <div class="bg-white p-6 rounded-lg shadow">
+          <h2 class="text-xl font-semibold mb-4">Wallet Setup Guide</h2>
+          <div class="prose">{{ wallet_guide | safe }}</div>
+        </div>
+
+        <!-- Chat interface -->
+        <div class="bg-white p-6 rounded-lg shadow md:col-span-2">
+          <div
+            id="chat-container"
+            class="h-96 overflow-y-auto mb-4 p-4 border rounded"
+          >
+            <div class="mb-4">
+              <div class="font-semibold text-gray-700">Assistant</div>
+              <div class="bg-blue-100 p-3 rounded-lg">
+                Welcome! I can help you with:
+                <ul class="list-disc ml-4 mt-2">
+                  {% for query in common_queries %}
+                  <li>{{ query }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Input form -->
+          <form id="chat-form" class="flex gap-2">
+            <input
+              type="text"
+              id="user-input"
+              class="flex-1 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="Ask me anything about the ticketing system..."
+            />
+            <button
+              type="submit"
+              class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              Send
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Ticket guide -->
+      <div class="mt-6 bg-white p-6 rounded-lg shadow">
+        <h2 class="text-xl font-semibold mb-4">Ticket Creation Guide</h2>
+        <div class="prose">{{ ticket_guide | safe }}</div>
+      </div>
+    </div>
+
+    <script>
+      document
+        .getElementById("chat-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+
+          const input = document.getElementById("user-input");
+          const query = input.value.trim();
+          if (!query) return;
+
+          // Add user message to chat
+          addMessage("User", query, "bg-gray-100");
+          input.value = "";
+
+          try {
+            const response = await fetch("/ask", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ query }),
+            });
+
+            const data = await response.json();
+            if (data.error) {
+              addMessage(
+                "Assistant",
+                "Sorry, I encountered an error. Please try again.",
+                "bg-red-100"
+              );
+            } else {
+              addMessage("Assistant", data.response, "bg-blue-100");
+            }
+          } catch (error) {
+            addMessage(
+              "Assistant",
+              "Sorry, something went wrong. Please try again.",
+              "bg-red-100"
+            );
+          }
+        });
+
+      function addMessage(sender, text, bgColor) {
+        const container = document.getElementById("chat-container");
+        const messageDiv = document.createElement("div");
+        messageDiv.className = "mb-4";
+        messageDiv.innerHTML = `
+                <div class="font-semibold text-gray-700">${sender}</div>
+                <div class="${bgColor} p-3 rounded-lg">${text}</div>
+            `;
+        container.appendChild(messageDiv);
+        container.scrollTop = container.scrollHeight;
+      }
+    </script>
+  </body>
+</html>
