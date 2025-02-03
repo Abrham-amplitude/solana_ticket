@@ -62,7 +62,7 @@ This system combines Solana blockchain technology with AI assistance to provide 
 1. Clone the repository:
 
 ```bash
-git clone [\[repository-url\]](https://github.com/Abrham-amplitude/solana_ticket.git)
+git clone https://github.com/Abrham-amplitude/solana_ticket.git
 cd solana
 ```
 
