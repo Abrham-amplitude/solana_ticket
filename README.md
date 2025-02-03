@@ -62,8 +62,8 @@ This system combines Solana blockchain technology with AI assistance to provide 
 1. Clone the repository:
 
 ```bash
-git clone [repository-url]
-cd solana-ticketing
+git clone [\[repository-url\]](https://github.com/Abrham-amplitude/solana_ticket.git)
+cd solana
 ```
 
 2. Create and activate virtual environment:
