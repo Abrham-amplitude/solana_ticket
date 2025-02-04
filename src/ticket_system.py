@@ -30,7 +30,7 @@ class TicketSystem:
             if balance == 0:
                 return {
                     "success": False,
-                    "error": "Wallet has 0 SOL. Please airdrop some SOL first using: solana airdrop 2 " + str(owner.pubkey()) + " --url devnet"
+                    "error": "Wallet has 0 SOL. Please airdrop some SOL first."
                 }
             
             # Make sure wallet has enough SOL
@@ -43,35 +43,27 @@ class TicketSystem:
             # Create ticket account
             ticket_account = Keypair()
             
-            # Calculate space needed for ticket data
-            TICKET_SPACE = 8 + 32 + 8 + 1  # ticket_id + owner + price + is_used
-            
-            # Get minimum balance for rent exemption
-            min_balance_resp = await self.client.get_minimum_balance_for_rent_exemption(TICKET_SPACE)
-            min_balance = min_balance_resp.value
-            
             # Create transfer instruction for ticket price
             transfer_ix = transfer(
                 TransferParams(
                     from_pubkey=owner.pubkey(),
                     to_pubkey=ticket_account.pubkey(),
-                    lamports=min_balance + price
+                    lamports=price
                 )
             )
             
             # Create transaction
-            transaction = Transaction()
-            transaction.add(transfer_ix)
+            transaction = Transaction().add(transfer_ix)
             
             # Get recent blockhash
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction with proper options
+            # Send transaction
             result = await self.client.send_transaction(
                 transaction,
-                [owner],  # List of signers
-                opts={"skip_confirmation": False}  # Wait for confirmation
+                owner,
+                opts={"skip_preflight": True}
             )
             
             return {
@@ -88,7 +80,7 @@ class TicketSystem:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"Failed to create ticket: {str(e)}. Make sure you have enough SOL in your wallet."
+                "error": f"Failed to create ticket: {str(e)}"
             }
     
     async def verify_ticket(self, ticket_pubkey: Pubkey) -> dict:
@@ -126,18 +118,17 @@ class TicketSystem:
             )
             
             # Create transaction
-            transaction = Transaction()
-            transaction.add(transfer_ix)
+            transaction = Transaction().add(transfer_ix)
             
             # Get recent blockhash
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction with proper options
+            # Send transaction
             result = await self.client.send_transaction(
                 transaction,
-                [user],  # List of signers
-                opts={"skip_confirmation": False}  # Wait for confirmation
+                user,
+                opts={"skip_preflight": True}
             )
             
             return {"success": True, "transaction_id": result.value}
