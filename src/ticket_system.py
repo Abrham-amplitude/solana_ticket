@@ -11,7 +11,7 @@ from datetime import datetime
 class TicketSystem:
     def __init__(self, rpc_url="https://api.devnet.solana.com"):
         """Initialize ticket system with Solana client"""
-        self.client = AsyncClient(rpc_url, commitment="confirmed")  # Use string instead of enum
+        self.client = AsyncClient(rpc_url)  # Remove commitment parameter
         
     async def check_wallet_balance(self, pubkey: Pubkey):
         """Check if wallet has enough SOL"""
@@ -62,17 +62,10 @@ class TicketSystem:
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction with proper options
-            opts = {
-                "skip_preflight": True,
-                "preflight_commitment": "confirmed",
-                "encoding": "base64"
-            }
-            
+            # Send transaction
             result = await self.client.send_transaction(
                 transaction,
-                owner,
-                opts=opts
+                owner
             )
             
             # Wait for confirmation
@@ -136,17 +129,10 @@ class TicketSystem:
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction with proper options
-            opts = {
-                "skip_preflight": True,
-                "preflight_commitment": "confirmed",
-                "encoding": "base64"
-            }
-            
+            # Send transaction
             result = await self.client.send_transaction(
                 transaction,
-                user,
-                opts=opts
+                user
             )
             
             # Wait for confirmation

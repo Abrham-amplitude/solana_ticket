@@ -66,22 +66,31 @@ def load_wallet(filename: str = "wallet.json") -> Keypair:
         # Try loading from base58 format
         try:
             base58_key = data.get("private_key")
-            if base58_key:
-                private_key_bytes = base58.b58decode(base58_key)
+            if not base58_key:
+                raise ValueError("No private key found in wallet file")
+                
+            private_key_bytes = base58.b58decode(base58_key)
+            # Handle both 32-byte and 64-byte private keys
+            if len(private_key_bytes) == 32:
+                # Convert 32-byte private key to keypair
+                wallet = Keypair.from_seed(private_key_bytes)
+            elif len(private_key_bytes) == 64:
+                # Use full 64-byte private key
                 wallet = Keypair.from_bytes(private_key_bytes)
-                # Verify the public key matches
-                if str(wallet.pubkey()) == data["pubkey"]:
-                    console.print(f"\n[green]Loaded wallet successfully[/green]")
-                    return wallet
-                else:
-                    console.print("[red]Error: Public key mismatch[/red]")
-                    return None
+            else:
+                raise ValueError(f"Invalid private key length: {len(private_key_bytes)} bytes (expected 32 or 64)")
+            
+            # Verify the public key matches
+            if str(wallet.pubkey()) != data["pubkey"]:
+                console.print("[red]Error: Public key mismatch[/red]")
+                return None
+                
+            console.print(f"\n[green]Loaded wallet successfully[/green]")
+            return wallet
+            
         except Exception as e:
             console.print(f"[red]Error loading private key: {str(e)}[/red]")
             return None
-            
-        console.print("[red]No valid private key found in wallet file[/red]")
-        return None
             
     except Exception as e:
         console.print(f"[red]Error loading wallet: {str(e)}[/red]")
@@ -92,16 +101,16 @@ def create_new_wallet():
     # Create new wallet using the default Keypair generation
     wallet = Keypair()
     
-    # Get the secret key bytes
-    secret_bytes = bytes(wallet.secret())
+    # Get the seed bytes (32 bytes)
+    seed_bytes = bytes(wallet.secret())[:32]
     
     console.print(f"\n[green]New wallet created![/green]")
     console.print(f"[yellow]Address: {wallet.pubkey()}[/yellow]")
     
-    # Save wallet details with both formats
+    # Save wallet details with 32-byte private key
     data = {
         "pubkey": str(wallet.pubkey()),
-        "private_key": base58.b58encode(secret_bytes).decode('ascii')
+        "private_key": base58.b58encode(seed_bytes).decode('ascii')
     }
     
     try:
@@ -342,56 +351,54 @@ async def demonstrate_ticket_systems(wallet_address: Pubkey):
                     price = 1_000_000  # 0.001 SOL
                     console.print(f"\n[yellow]Creating NFT ticket for {price/1_000_000_000} SOL...[/yellow]")
                     
-                    # Get private key if not already loaded
-                    private_key = None
+                    # First try to load wallet from file
+                    wallet = None
                     try:
-                        # Try to load from wallet.json first
-                        if os.path.exists("wallet.json"):
-                            with open("wallet.json", 'r') as f:
-                                data = json.load(f)
-                                if "private_key" in data:
-                                    # Load base58 private key
-                                    private_key = base58.b58decode(data["private_key"])
-                                    if len(private_key) != 64:
-                                        raise ValueError("Invalid private key length")
-                                    console.print("[green]Loaded private key from wallet.json[/green]")
+                        wallet = load_wallet()
                     except Exception as e:
-                        console.print(f"[yellow]Could not load saved wallet: {str(e)}[/yellow]")
+                        console.print(f"[red]Error loading wallet: {str(e)}[/red]")
                     
-                    if not private_key:
+                    if not wallet:
                         console.print("\n[yellow]To buy an NFT ticket, you need your wallet's private key.[/yellow]")
-                        console.print("[yellow]This should be the private key shown when you created your wallet.[/yellow]")
+                        console.print("[yellow]Enter your private key in base58 format.[/yellow]")
                         console.print("\nEnter private key (or press Enter to cancel):")
                         key_input = input().strip()
                         if not key_input:
                             continue
+                            
                         try:
                             # Try base58 decode
-                            private_key = base58.b58decode(key_input)
-                            if len(private_key) != 64:
-                                raise ValueError("Invalid private key length")
+                            private_key_bytes = base58.b58decode(key_input)
+                                
+                            # Handle both 32-byte and 64-byte private keys
+                            if len(private_key_bytes) == 32:
+                                wallet = Keypair.from_seed(private_key_bytes)
+                            elif len(private_key_bytes) == 64:
+                                wallet = Keypair.from_bytes(private_key_bytes)
+                            else:
+                                raise ValueError(f"Invalid key length: {len(private_key_bytes)} bytes (expected 32 or 64)")
+                            
+                            # Verify the keypair matches the wallet address
+                            if str(wallet.pubkey()) != str(wallet_address):
+                                raise ValueError("Private key does not match wallet address")
+                                
                         except Exception as e:
-                            console.print(f"[red]Invalid private key format: {str(e)}[/red]")
-                            console.print("\n[yellow]Please use the exact private key shown when creating the wallet[/yellow]")
+                            console.print(f"[red]Invalid private key: {str(e)}[/red]")
                             continue
                     
+                    if not wallet:
+                        console.print("[red]No valid wallet available. Cannot proceed with purchase.[/red]")
+                        continue
+                    
                     try:
-                        # Create keypair from private key
-                        wallet = Keypair.from_bytes(private_key)
-                        
-                        # Verify the keypair matches the wallet address
-                        if str(wallet.pubkey()) != str(wallet_address):
-                            console.print("[red]Private key does not match wallet address[/red]")
-                            console.print(f"Expected: {wallet_address}")
-                            console.print(f"Got: {wallet.pubkey()}")
-                            continue
-                            
                         nft_minter = NFTTicketMinter()
                         
                         # Check balance first
                         balance = await check_and_display_balance(nft_minter.client, wallet_address)
-                        if balance < price + 1_000_000:  # Add extra for fees
+                        if balance < price + 5_000_000:  # Add extra for fees (0.005 SOL for safety)
                             console.print(f"[red]Insufficient balance for NFT ticket and fees[/red]")
+                            console.print(f"Required: {(price + 5_000_000)/1_000_000_000} SOL")
+                            console.print(f"Current: {balance/1_000_000_000} SOL")
                             return
                         
                         event_name = "Solana Event 2024"
@@ -429,10 +436,8 @@ async def demonstrate_ticket_systems(wallet_address: Pubkey):
                     except Exception as e:
                         console.print(f"[red]Error purchasing NFT ticket: {str(e)}[/red]")
                         console.print("\n[yellow]Troubleshooting tips:[/yellow]")
-                        console.print("1. Make sure you have enough SOL (at least 0.002 SOL)")
-                        console.print("2. Check that your private key is in the correct format:")
-                        console.print("   - 128 character hex string")
-                        console.print("   - Base58 encoded string")
+                        console.print("1. Make sure you have enough SOL (at least 0.006 SOL)")
+                        console.print("2. Check that your private key is in base58 format")
                         console.print("3. Try creating a new wallet first to see the correct format")
                         console.print("4. Try again in a few seconds")
                 else:

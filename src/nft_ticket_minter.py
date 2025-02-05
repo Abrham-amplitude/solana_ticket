@@ -9,7 +9,9 @@ from spl.token.instructions import (
     mint_to,
     create_associated_token_account,
     get_associated_token_address,
-    burn
+    burn,
+    InitializeMintParams,
+    MintToParams
 )
 import json
 from datetime import datetime
@@ -17,7 +19,8 @@ import os
 
 class NFTTicketMinter:
     def __init__(self, rpc_url="https://api.devnet.solana.com"):
-        self.client = AsyncClient(rpc_url, commitment="confirmed")
+        """Initialize NFT ticket minter with Solana client"""
+        self.client = AsyncClient(rpc_url)  # Remove commitment parameter
         
     async def create_nft_ticket(self, owner: Keypair, event_name: str, event_date: str, seat_info: dict, price: float):
         """Create a new NFT ticket"""
@@ -28,53 +31,71 @@ class NFTTicketMinter:
             # Get token program ID
             token_program_id = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
             
-            # Calculate rent-exempt minimum
-            space = 82  # Standard token account size
-            rent = await self.client.get_minimum_balance_for_rent_exemption(space)
+            # Calculate rent-exempt minimum for mint account
+            mint_space = 82  # Standard token account size
+            mint_rent_response = await self.client.get_minimum_balance_for_rent_exemption(mint_space)
+            mint_rent = mint_rent_response.value  # Extract the actual value from the response
             
-            # Create mint account transaction
+            # Check owner's balance
+            owner_balance = await self.client.get_balance(owner.pubkey())
+            print(f"Owner balance: {owner_balance.value}")
+            if owner_balance.value < mint_rent + 5_000_000:  # mint_rent + extra for fees
+                return {
+                    "success": False,
+                    "error": f"Insufficient balance. Need at least {(mint_rent + 5_000_000) / 1_000_000_000} SOL"
+                }
+            
+            # Create transaction
             transaction = Transaction()
             
-            # Create account instruction
-            create_account_ix = create_account(
+            # Create mint account with proper rent
+            create_mint_account_ix = create_account(
                 CreateAccountParams(
                     from_pubkey=owner.pubkey(),
                     to_pubkey=mint_account.pubkey(),
-                    lamports=rent,
-                    space=space,
+                    lamports=mint_rent,
+                    space=mint_space,
                     owner=token_program_id
                 )
             )
-            transaction.add(create_account_ix)
+            transaction.add(create_mint_account_ix)
             
-            # Initialize mint instruction
+            # Initialize mint
             init_mint_ix = initialize_mint(
-                program_id=token_program_id,
-                mint=mint_account.pubkey(),
-                mint_authority=owner.pubkey(),
-                freeze_authority=None,
-                decimals=0
+                InitializeMintParams(
+                    program_id=token_program_id,
+                    mint=mint_account.pubkey(),
+                    decimals=0,
+                    mint_authority=owner.pubkey(),
+                    freeze_authority=None
+                )
             )
             transaction.add(init_mint_ix)
             
             # Get associated token account
-            token_account = get_associated_token_address(owner.pubkey(), mint_account.pubkey())
+            token_account = get_associated_token_address(
+                owner.pubkey(),
+                mint_account.pubkey()
+            )
             
-            # Create associated token account instruction
+            # Create associated token account
             create_ata_ix = create_associated_token_account(
-                payer=owner.pubkey(),
-                owner=owner.pubkey(),
-                mint=mint_account.pubkey()
+                owner.pubkey(),  # payer
+                owner.pubkey(),  # wallet_address
+                mint_account.pubkey()  # token_mint
             )
             transaction.add(create_ata_ix)
             
-            # Mint one token instruction
+            # Mint one token
             mint_to_ix = mint_to(
-                program_id=token_program_id,
-                mint=mint_account.pubkey(),
-                dest=token_account,
-                mint_authority=owner.pubkey(),
-                amount=1
+                MintToParams(
+                    program_id=token_program_id,
+                    mint=mint_account.pubkey(),
+                    dest=token_account,
+                    mint_authority=owner.pubkey(),
+                    amount=1,
+                    signers=[]  # Empty list since we're signing with the transaction
+                )
             )
             transaction.add(mint_to_ix)
             
@@ -82,40 +103,37 @@ class NFTTicketMinter:
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction with proper options
-            opts = {
-                "skip_preflight": True,
-                "preflight_commitment": "confirmed",
-                "encoding": "base64"
-            }
-            
-            # Send transaction with both signers
-            signers = [owner, mint_account]
-            
-            # Send transaction
-            result = await self.client.send_transaction(
-                transaction,
-                *signers,
-                opts=opts
-            )
-            
-            # Wait for confirmation with increased timeout
-            await self.client.confirm_transaction(result.value, commitment="confirmed")
-            
-            # Return success response
-            return {
-                "success": True,
-                "nft_address": str(mint_account.pubkey()),
-                "token_account": str(token_account),
-                "metadata": {
-                    "name": f"{event_name} Ticket",
-                    "event_date": event_date,
-                    "seat_info": seat_info,
-                    "price": price
-                },
-                "owner": str(owner.pubkey()),
-                "transaction_id": str(result.value)
-            }
+            try:
+                # Send and confirm transaction with both signers
+                signers = [owner, mint_account]
+                result = await self.client.send_transaction(
+                    transaction,
+                    *signers
+                )
+                
+                # Wait for confirmation
+                await self.client.confirm_transaction(result.value)
+                
+                # Return success response
+                return {
+                    "success": True,
+                    "nft_address": str(mint_account.pubkey()),
+                    "token_account": str(token_account),
+                    "metadata": {
+                        "name": f"{event_name} Ticket",
+                        "event_date": event_date,
+                        "seat_info": seat_info,
+                        "price": price
+                    },
+                    "owner": str(owner.pubkey()),
+                    "transaction_id": str(result.value)
+                }
+                
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e)
+                }
             
         except Exception as e:
             return {
@@ -175,17 +193,10 @@ class NFTTicketMinter:
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction with proper options
-            opts = {
-                "skip_preflight": True,
-                "preflight_commitment": "confirmed",
-                "encoding": "base64"
-            }
-            
+            # Send transaction
             result = await self.client.send_transaction(
                 transaction,
-                owner,
-                opts=opts
+                owner
             )
             
             # Wait for confirmation
@@ -240,4 +251,5 @@ class NFTTicketMinter:
     
     async def close(self):
         """Close the client connection"""
+        await self.client.close() 
         await self.client.close() 
