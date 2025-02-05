@@ -25,8 +25,8 @@ def get_wallet_choice():
     while True:
         console.print("\n[cyan]Choose wallet option:[/cyan]")
         console.print("1. Create new wallet")
-        console.print("2. Import existing wallet (with private key)")
-        console.print("3. View wallet details")
+        console.print("2. Use existing wallet address")
+        console.print("3. View saved wallet")
         choice = input("\nEnter choice (1, 2, or 3): ").strip()
         
         if choice in ['1', '2', '3']:
@@ -62,30 +62,63 @@ def load_wallet(filename: str = "wallet.json") -> Keypair:
             
         with open(filename, 'r') as f:
             data = json.load(f)
-        private_key = base58.b58decode(data["private_key"])
-        wallet = Keypair.from_bytes(private_key)
-        return wallet
+        
+        # Try loading from base58 format
+        try:
+            base58_key = data.get("private_key")
+            if base58_key:
+                private_key_bytes = base58.b58decode(base58_key)
+                wallet = Keypair.from_bytes(private_key_bytes)
+                # Verify the public key matches
+                if str(wallet.pubkey()) == data["pubkey"]:
+                    console.print(f"\n[green]Loaded wallet successfully[/green]")
+                    return wallet
+                else:
+                    console.print("[red]Error: Public key mismatch[/red]")
+                    return None
+        except Exception as e:
+            console.print(f"[red]Error loading private key: {str(e)}[/red]")
+            return None
+            
+        console.print("[red]No valid private key found in wallet file[/red]")
+        return None
+            
     except Exception as e:
-        if isinstance(e, FileNotFoundError):
-            console.print("[yellow]No wallet file found. Please create or import a wallet first.[/yellow]")
-        else:
-            console.print(f"[red]Error loading wallet: {str(e)}[/red]")
+        console.print(f"[red]Error loading wallet: {str(e)}[/red]")
         return None
 
 def create_new_wallet():
     """Create a new wallet and save details"""
+    # Create new wallet using the default Keypair generation
     wallet = Keypair()
+    
+    # Get the secret key bytes
+    secret_bytes = bytes(wallet.secret())
+    
     console.print(f"\n[green]New wallet created![/green]")
     console.print(f"[yellow]Address: {wallet.pubkey()}[/yellow]")
     
-    # Show private key (only for development/testing)
-    private_key = base58.b58encode(bytes(wallet.secret())).decode('ascii')
-    console.print(f"[red]SAVE THIS PRIVATE KEY (for testing only):[/red]")
-    console.print(f"[red]{private_key}[/red]")
+    # Save wallet details with both formats
+    data = {
+        "pubkey": str(wallet.pubkey()),
+        "private_key": base58.b58encode(secret_bytes).decode('ascii')
+    }
     
-    # Save wallet details
-    save_wallet(wallet)
-    return wallet
+    try:
+        with open("wallet.json", 'w') as f:
+            json.dump(data, f, indent=2)
+        console.print("\n[green]Wallet saved successfully![/green]")
+        console.print(f"[yellow]Wallet public key: {wallet.pubkey()}[/yellow]")
+        console.print(f"[yellow]Wallet file: {os.path.abspath('wallet.json')}[/yellow]")
+        
+        # Show the private key
+        console.print("\n[bold cyan]Private Key (SAVE THIS):[/bold cyan]")
+        console.print(data["private_key"])
+        
+        return wallet
+    except Exception as e:
+        console.print(f"[red]Error saving wallet: {str(e)}[/red]")
+        return None
 
 def import_existing_wallet():
     """Import existing wallet using private key"""
@@ -124,313 +157,337 @@ def view_wallet_details():
     if wallet:
         console.print("\n[bold cyan]Wallet Details:[/bold cyan]")
         console.print(f"[yellow]Public Key: {wallet.pubkey()}[/yellow]")
-        console.print("[green]✓ Wallet loaded successfully[/green]")
+        
+        # Show the private key format
+        try:
+            with open("wallet.json", 'r') as f:
+                data = json.load(f)
+            if "private_key" in data:
+                console.print("\n[yellow]Private Key (Base58 Format):[/yellow]")
+                console.print(data["private_key"])
+        except Exception:
+            pass
+            
+        console.print("\n[green]✓ Wallet loaded successfully[/green]")
         return wallet
     return None
 
-def get_sol_amount():
-    """Get desired SOL amount from user"""
+def use_existing_wallet_address():
+    """Use an existing wallet address"""
     while True:
-        console.print("\n[cyan]Enter SOL amount to use:[/cyan]")
-        console.print("[yellow]Recommended amounts:[/yellow]")
-        console.print("- Minimum: 0.00001 SOL")
-        console.print("- Standard: 0.001 SOL")
-        console.print("- Maximum: 2.0 SOL")
+        console.print("\n[cyan]Enter your wallet address:[/cyan]")
+        address = input().strip()
         try:
-            amount = float(input("Amount in SOL: ").strip())
-            if 0.00001 <= amount <= 2.0:  # Much lower minimum limit
-                if amount < 0.001:
-                    console.print("[yellow]Warning: Very small amount. Transaction might fail due to rent costs.[/yellow]")
-                    console.print("Do you want to continue? (y/n)")
-                    if input().lower() == 'y':
-                        return amount
-                else:
-                    return amount
-            console.print("[red]Please enter an amount between 0.00001 and 2.0 SOL[/red]")
+            pubkey = Pubkey.from_string(address)
+            console.print(f"[green]Using wallet: {pubkey}[/green]")
+            return pubkey
         except ValueError:
-            console.print("[red]Please enter a valid number[/red]")
+            console.print("[red]Invalid wallet address. Please try again.[/red]")
+            retry = input("Try again? (y/n): ").lower()
+            if retry != 'y':
+                return None
 
-async def check_wallet_balance(client, pubkey):
-    """Check if wallet has enough SOL"""
+async def check_and_display_balance(client, pubkey):
+    """Check and display wallet balance"""
     try:
         balance = await client.get_balance(pubkey)
+        sol_balance = balance.value / 1_000_000_000
+        console.print(f"\n[green]Current wallet balance: {sol_balance} SOL[/green]")
         return balance.value
     except Exception as e:
         console.print(f"[red]Error checking balance: {str(e)}[/red]")
         return 0
 
-async def wait_for_balance(client, pubkey, required_balance, max_attempts=5):
-    """Wait for wallet to receive SOL"""
-    for i in range(max_attempts):
-        balance = await check_wallet_balance(client, pubkey)
-        if balance >= required_balance:
-            return True
-        if i < max_attempts - 1:
-            console.print(f"[yellow]Waiting for SOL... Current balance: {balance/1_000_000_000} SOL[/yellow]")
-            await asyncio.sleep(5)  # Wait 5 seconds between checks
-    return False
-
-async def demonstrate_ticket_systems(wallet: Keypair):
+async def demonstrate_ticket_systems(wallet_address: Pubkey):
     """Client demonstration of both traditional and NFT ticket systems"""
     console.print("\n[bold cyan]🎫 Solana Ticketing System Demonstration[/bold cyan]")
     console.print("\nThis demo will showcase two ticketing approaches:")
     console.print("1. [green]Traditional Tickets[/green]: Simple and efficient")
     console.print("2. [blue]NFT Tickets[/blue]: Enhanced features with blockchain verification\n")
 
-    console.print(f"[yellow]Using Wallet Address:[/yellow] {wallet.pubkey()}")
+    console.print(f"[yellow]Using Wallet Address:[/yellow] {wallet_address}")
     
-    # Initialize both systems
+    # Initialize ticket system
     ticket_system = TicketSystem()
-    nft_minter = NFTTicketMinter()
     
     try:
-        # Check wallet balance
-        balance = await check_wallet_balance(nft_minter.client, wallet.pubkey())
-        console.print(f"\n[green]Current wallet balance: {balance/1_000_000_000} SOL[/green]")
-        
-        try:
-            # Check if wallet has private key by attempting to access it
-            wallet.secret()
-        except Exception:
-            console.print("\n[red]This is a read-only wallet. For the demo, you need a wallet with a private key.[/red]")
-            console.print("[yellow]Please use option 2 to import an existing wallet instead.[/yellow]")
-            return
-
-        # Check wallet balance with smaller minimum
-        required_balance = 10_000  # 0.00001 SOL minimum
-        console.print(f"\n[yellow]Checking wallet balance (need {required_balance/1_000_000_000} SOL)...[/yellow]")
-        
-        balance = await check_wallet_balance(nft_minter.client, wallet.pubkey())
-        console.print(f"\n[green]Current wallet balance: {balance/1_000_000_000} SOL[/green]")
-        
-        if balance < required_balance:
-            console.print(f"\n[red]Insufficient balance. Please try these methods to get SOL:[/red]")
-            console.print("1. Airdrop a small amount of SOL:")
-            console.print(f"   solana airdrop 0.00001 {wallet.pubkey()} --url devnet")
-            console.print("2. Try a different RPC endpoint:")
-            console.print("   solana config set --url https://api.devnet.solana.com")
-            console.print("3. Use Solana Faucet website:")
-            console.print("   https://solfaucet.com")
-            return
-
-        # Create comparison table
-        table = Table(title="Ticket System Comparison")
-        table.add_column("Feature", style="cyan")
-        table.add_column("Traditional Ticket", style="green")
-        table.add_column("NFT Ticket", style="blue")
-        
-        # Step 1: Create tickets
-        console.print("\n[bold]Step 1: Creating Tickets[/bold]")
-        
-        # Traditional ticket
-        ticket_price = 1_000_000  # 0.001 SOL
-        traditional_ticket = await ticket_system.create_ticket(wallet, ticket_price)
-        
-        if not traditional_ticket.get("success"):
-            console.print(f"[red]Failed to create traditional ticket: {traditional_ticket.get('error')}[/red]")
-            return
+        while True:
+            # Check wallet balance
+            balance = await check_and_display_balance(ticket_system.client, wallet_address)
             
-        console.print("[green]Traditional ticket created successfully![/green]")
-        
-        # NFT ticket
-        event_name = "Solana Conference 2024"
-        event_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        seat_info = {
-            "section": "VIP",
-            "row": "A",
-            "seat": "1"
-        }
-        
-        nft_ticket = await nft_minter.create_nft_ticket(
-            owner=wallet,
-            event_name=event_name,
-            event_date=event_date,
-            seat_info=seat_info,
-            price=float(ticket_price) / 1_000_000_000,
-            image_url="https://example.com/ticket.png"
-        )
-        
-        if not nft_ticket.get("success"):
-            console.print(f"[red]Failed to create NFT ticket: {nft_ticket.get('error')}[/red]")
-            return
+            # Calculate minimum required balance
+            ticket_price = 100_000  # 0.0001 SOL for the ticket
+            min_required = ticket_price + 100_000  # Additional 0.0001 SOL for fees
             
-        console.print("[green]NFT ticket created successfully![/green]")
-        
-        # Add creation results to table
-        table.add_row(
-            "Creation",
-            "✅ Simple account creation",
-            "✅ NFT minting with metadata"
-        )
-        table.add_row(
-            "Storage",
-            f"Account: {traditional_ticket.get('ticket_data', {}).get('owner', 'N/A')[:16]}...",
-            f"NFT: {nft_ticket.get('nft_address', 'N/A')[:16]}..."
-        )
-        
-        # Step 2: Verify tickets
-        console.print("\n[bold]Step 2: Verifying Tickets[/bold]")
-        
-        trad_verify = await ticket_system.verify_ticket(traditional_ticket["ticket_pubkey"])
-        nft_verify = await nft_minter.verify_nft_ticket(nft_ticket["nft_address"])
-        
-        table.add_row(
-            "Verification",
-            "✅ Balance-based verification" if trad_verify.get("valid") else "❌ Verification failed",
-            "✅ On-chain metadata verification" if nft_verify.get("valid") else "❌ Verification failed"
-        )
-        
-        # Step 3: Show ticket details
-        console.print("\n[bold]Step 3: Ticket Details[/bold]")
-        
-        # Create ticket detail panels
-        trad_panel = Panel(
-            f"""
-            [green]Traditional Ticket Details[/green]
-            Ticket ID: {traditional_ticket.get('ticket_pubkey', 'N/A')[:16]}...
-            Price: {ticket_price/1_000_000_000} SOL
-            Status: {'Valid' if trad_verify.get('valid') else 'Invalid'}
-            """,
-            title="Traditional Ticket"
-        )
-        
-        nft_panel = Panel(
-            f"""
-            [blue]NFT Ticket Details[/blue]
-            NFT Address: {nft_ticket.get('nft_address', 'N/A')[:16]}...
-            Event: {event_name}
-            Date: {event_date}
-            Seat: Section {seat_info['section']}, Row {seat_info['row']}, Seat {seat_info['seat']}
-            Price: {ticket_price/1_000_000_000} SOL
-            Status: {'Valid' if nft_verify.get('valid') else 'Invalid'}
-            """,
-            title="NFT Ticket"
-        )
-        
-        # Display panels side by side
-        layout = Layout()
-        layout.split_row(
-            Layout(trad_panel, name="traditional"),
-            Layout(nft_panel, name="nft")
-        )
-        console.print(layout)
-        
-        # Step 4: Use tickets
-        console.print("\n[bold]Step 4: Using Tickets[/bold]")
-        
-        trad_use = await ticket_system.use_ticket(traditional_ticket["ticket_pubkey"], wallet)
-        nft_use = await nft_minter.use_nft_ticket(wallet, nft_ticket["nft_address"])
-        
-        table.add_row(
-            "Usage",
-            "✅ Simple transfer back",
-            "✅ Token burning with history"
-        )
-        
-        # Step 5: Show history
-        console.print("\n[bold]Step 5: Transaction History[/bold]")
-        
-        history = await nft_minter.get_ticket_history(nft_ticket["nft_address"])
-        
-        table.add_row(
-            "History Tracking",
-            "❌ Not available",
-            "✅ Full transaction history"
-        )
-        
-        if history["success"]:
-            console.print("\n[blue]NFT Ticket History:[/blue]")
-            for entry in history["history"]:
-                console.print(f"  ▪ {entry['type']} at {datetime.fromtimestamp(entry['timestamp'])}")
-        
-        # Display final comparison table
-        console.print("\n[bold]System Comparison Summary[/bold]")
-        console.print(table)
-        
-        # Display benefits
-        console.print("\n[bold]Key Benefits of NFT Tickets:[/bold]")
-        console.print("✨ Enhanced security through blockchain verification")
-        console.print("✨ Rich metadata storage (event details, seat info)")
-        console.print("✨ Transaction history tracking")
-        console.print("✨ Potential for secondary market trading")
-        console.print("✨ Collectible value for special events")
-        
-        console.print("\n[bold green]Demo completed successfully! ✅[/bold green]")
+            if balance < min_required:
+                console.print(f"\n[red]Insufficient balance. Minimum required: {min_required/1_000_000_000} SOL[/red]")
+                console.print("\n[yellow]To add SOL to your wallet:[/yellow]")
+                console.print("1. Open a new terminal")
+                console.print(f"2. Run: solana airdrop 1 {wallet_address} --url devnet")
+                console.print(f"3. Check balance: solana balance {wallet_address} --url devnet")
+                console.print("\nWould you like to:")
+                console.print("1. Check balance again")
+                console.print("2. Exit")
+                choice = input("\nEnter choice (1-2): ").strip()
+                
+                if choice == "2":
+                    return
+                continue
+            
+            # Show ticket options
+            console.print("\n[bold]Available Operations:[/bold]")
+            console.print("1. View ticket details")
+            console.print("2. Verify ticket")
+            console.print("3. Check ticket history")
+            console.print("4. Buy new ticket")
+            console.print("5. Check balance")
+            console.print("6. Exit")
+            
+            choice = input("\nEnter your choice (1-6): ")
+            
+            if choice == "1":
+                # View ticket details
+                console.print("\n[bold]Ticket Details:[/bold]")
+                console.print(f"Wallet Address: {wallet_address}")
+                console.print(f"Available Balance: {balance/1_000_000_000} SOL")
+                console.print(f"Minimum Ticket Price: {ticket_price/1_000_000_000} SOL")
+            
+            elif choice == "2":
+                # Verify ticket
+                ticket_address = input("\nEnter ticket address to verify: ")
+                try:
+                    ticket_pubkey = Pubkey.from_string(ticket_address)
+                    verify_result = await ticket_system.verify_ticket(ticket_pubkey)
+                    if verify_result["valid"]:
+                        console.print("[green]✓ Ticket is valid![/green]")
+                        console.print(f"Ticket Balance: {verify_result['balance']/1_000_000_000} SOL")
+                    else:
+                        console.print(f"[red]× Invalid ticket: {verify_result.get('error', 'Unknown error')}[/red]")
+                except ValueError:
+                    console.print("[red]Invalid ticket address format[/red]")
+                
+            elif choice == "3":
+                # Check history
+                console.print("\n[bold]Transaction History:[/bold]")
+                console.print("This feature requires the NFT ticket address.")
+                nft_address = input("Enter NFT ticket address (or press Enter to skip): ")
+                if nft_address.strip():
+                    try:
+                        nft_pubkey = Pubkey.from_string(nft_address)
+                        nft_minter = NFTTicketMinter()
+                        history = await nft_minter.get_ticket_history(nft_pubkey)
+                        if history["success"]:
+                            for entry in history["history"]:
+                                console.print(f"- {entry['type']} at {datetime.fromtimestamp(entry['timestamp'])}")
+                        else:
+                            console.print(f"[red]Error getting history: {history.get('error')}[/red]")
+                        await nft_minter.close()
+                    except ValueError:
+                        console.print("[red]Invalid NFT address format[/red]")
+                    
+            elif choice == "4":
+                # Buy new ticket
+                console.print("\n[bold]Buy New Ticket[/bold]")
+                console.print("\nSelect ticket type:")
+                console.print("1. Traditional Ticket (0.0001 SOL)")
+                console.print("2. NFT Ticket (0.001 SOL)")
+                
+                ticket_choice = input("\nEnter choice (1-2): ")
+                
+                if ticket_choice == "1":
+                    # Traditional ticket
+                    price = 100_000  # 0.0001 SOL
+                    console.print(f"\n[yellow]Creating traditional ticket for {price/1_000_000_000} SOL...[/yellow]")
+                    
+                    # Get private key if not already loaded
+                    private_key = None
+                    if os.path.exists("wallet.json"):
+                        try:
+                            with open("wallet.json", 'r') as f:
+                                data = json.load(f)
+                                private_key = base58.b58decode(data["private_key"])
+                        except Exception:
+                            pass
+                    
+                    if not private_key:
+                        console.print("\n[yellow]To buy a ticket, you need your wallet's private key.[/yellow]")
+                        console.print("Enter your private key (or press Enter to cancel):")
+                        key_input = input().strip()
+                        if not key_input:
+                            return
+                        try:
+                            private_key = base58.b58decode(key_input)
+                        except Exception:
+                            console.print("[red]Invalid private key format[/red]")
+                            return
+                    
+                    try:
+                        wallet = Keypair.from_bytes(private_key)
+                        if str(wallet.pubkey()) != str(wallet_address):
+                            console.print("[red]Private key does not match wallet address[/red]")
+                            return
+                            
+                        result = await ticket_system.create_ticket(wallet, price)
+                        if result["success"]:
+                            console.print("\n[green]✓ Ticket purchased successfully![/green]")
+                            console.print(f"Ticket Address: {result['ticket_pubkey']}")
+                            console.print("[yellow]SAVE THIS TICKET ADDRESS![/yellow]")
+                        else:
+                            console.print(f"\n[red]Failed to purchase ticket: {result.get('error')}[/red]")
+                    except Exception as e:
+                        console.print(f"[red]Error purchasing ticket: {str(e)}[/red]")
+                
+                elif ticket_choice == "2":
+                    # NFT ticket
+                    price = 1_000_000  # 0.001 SOL
+                    console.print(f"\n[yellow]Creating NFT ticket for {price/1_000_000_000} SOL...[/yellow]")
+                    
+                    # Get private key if not already loaded
+                    private_key = None
+                    try:
+                        # Try to load from wallet.json first
+                        if os.path.exists("wallet.json"):
+                            with open("wallet.json", 'r') as f:
+                                data = json.load(f)
+                                if "private_key" in data:
+                                    # Load base58 private key
+                                    private_key = base58.b58decode(data["private_key"])
+                                    if len(private_key) != 64:
+                                        raise ValueError("Invalid private key length")
+                                    console.print("[green]Loaded private key from wallet.json[/green]")
+                    except Exception as e:
+                        console.print(f"[yellow]Could not load saved wallet: {str(e)}[/yellow]")
+                    
+                    if not private_key:
+                        console.print("\n[yellow]To buy an NFT ticket, you need your wallet's private key.[/yellow]")
+                        console.print("[yellow]This should be the private key shown when you created your wallet.[/yellow]")
+                        console.print("\nEnter private key (or press Enter to cancel):")
+                        key_input = input().strip()
+                        if not key_input:
+                            continue
+                        try:
+                            # Try base58 decode
+                            private_key = base58.b58decode(key_input)
+                            if len(private_key) != 64:
+                                raise ValueError("Invalid private key length")
+                        except Exception as e:
+                            console.print(f"[red]Invalid private key format: {str(e)}[/red]")
+                            console.print("\n[yellow]Please use the exact private key shown when creating the wallet[/yellow]")
+                            continue
+                    
+                    try:
+                        # Create keypair from private key
+                        wallet = Keypair.from_bytes(private_key)
+                        
+                        # Verify the keypair matches the wallet address
+                        if str(wallet.pubkey()) != str(wallet_address):
+                            console.print("[red]Private key does not match wallet address[/red]")
+                            console.print(f"Expected: {wallet_address}")
+                            console.print(f"Got: {wallet.pubkey()}")
+                            continue
+                            
+                        nft_minter = NFTTicketMinter()
+                        
+                        # Check balance first
+                        balance = await check_and_display_balance(nft_minter.client, wallet_address)
+                        if balance < price + 1_000_000:  # Add extra for fees
+                            console.print(f"[red]Insufficient balance for NFT ticket and fees[/red]")
+                            return
+                        
+                        event_name = "Solana Event 2024"
+                        event_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+                        seat_info = {
+                            "section": "VIP",
+                            "row": "A",
+                            "seat": "1"
+                        }
+                        
+                        console.print("\n[yellow]Creating NFT ticket...[/yellow]")
+                        result = await nft_minter.create_nft_ticket(
+                            owner=wallet,
+                            event_name=event_name,
+                            event_date=event_date,
+                            seat_info=seat_info,
+                            price=price/1_000_000_000
+                        )
+                        
+                        if result["success"]:
+                            console.print("\n[green]✓ NFT Ticket purchased successfully![/green]")
+                            console.print(f"NFT Address: {result['nft_address']}")
+                            console.print(f"Token Account: {result['token_account']}")
+                            console.print("\n[yellow]Ticket Details:[/yellow]")
+                            console.print(f"Event: {event_name}")
+                            console.print(f"Date: {event_date}")
+                            console.print(f"Section: {seat_info['section']}")
+                            console.print(f"Row: {seat_info['row']}")
+                            console.print(f"Seat: {seat_info['seat']}")
+                            console.print("\n[bold yellow]SAVE THESE ADDRESSES![/bold yellow]")
+                        else:
+                            console.print(f"\n[red]Failed to purchase NFT ticket: {result['error']}[/red]")
+                            
+                        await nft_minter.close()
+                    except Exception as e:
+                        console.print(f"[red]Error purchasing NFT ticket: {str(e)}[/red]")
+                        console.print("\n[yellow]Troubleshooting tips:[/yellow]")
+                        console.print("1. Make sure you have enough SOL (at least 0.002 SOL)")
+                        console.print("2. Check that your private key is in the correct format:")
+                        console.print("   - 128 character hex string")
+                        console.print("   - Base58 encoded string")
+                        console.print("3. Try creating a new wallet first to see the correct format")
+                        console.print("4. Try again in a few seconds")
+                else:
+                    console.print("[red]Invalid choice[/red]")
+            
+            elif choice == "5":
+                # Just continue the loop to check balance again
+                continue
+                
+            elif choice == "6":
+                break
+                
+            else:
+                console.print("[red]Invalid choice[/red]")
+            
+            console.print("\nPress Enter to continue...")
+            input()
         
     except Exception as e:
-        console.print(f"\n[red]Demo failed: {str(e)}[/red]")
-        console.print("\n[yellow]Troubleshooting tips:[/yellow]")
-        console.print("1. Make sure you have enough SOL in your wallet")
-        console.print("2. Check your internet connection")
-        console.print("3. Try using a different RPC endpoint")
-        raise
-        
+        console.print(f"\n[red]Error: {str(e)}[/red]")
     finally:
-        # Clean up
         await ticket_system.close()
-        await nft_minter.close()
 
 if __name__ == "__main__":
     console.print("\n=== Solana Ticketing System Client Demo ===")
     
-    while True:
-        # Get wallet choice
-        wallet_choice = get_wallet_choice()
-        wallet = None
-        
-        # Handle wallet operations
-        if wallet_choice == '1':
-            wallet = create_new_wallet()
-            break
-        elif wallet_choice == '2':
-            wallet = import_existing_wallet()
-            if wallet:
-                break
-        else:
-            wallet = view_wallet_details()
-            if wallet:
-                break
-            console.print("\n[yellow]Would you like to try another option? (y/n)[/yellow]")
-            if input().lower() != 'y':
-                console.print("[red]Exiting demo. Please run again to create or import a wallet.[/red]")
-                sys.exit(1)
-            continue
+    # Get wallet choice
+    wallet_choice = get_wallet_choice()
+    wallet_address = None
     
-    if not wallet:
-        console.print("[red]No wallet available. Please create or import a wallet to continue.[/red]")
+    if wallet_choice == '1':
+        # Create new wallet
+        wallet = create_new_wallet()
+        wallet_address = wallet.pubkey()
+        
+        # Show airdrop instructions and wait for user
+        console.print("\n[yellow]Before continuing, you need to add SOL to your wallet:[/yellow]")
+        console.print("1. Open a new terminal")
+        console.print(f"2. Run: solana airdrop 1 {wallet_address} --url devnet")
+        console.print(f"3. Check balance: solana balance {wallet_address} --url devnet")
+        console.print("\nPress Enter after you have added SOL to continue...")
+        input()
+        
+    elif wallet_choice == '2':
+        # Use existing wallet address
+        wallet_address = use_existing_wallet_address()
+    else:
+        # View saved wallet
+        wallet = view_wallet_details()
+        if wallet:
+            wallet_address = wallet.pubkey()
+    
+    if not wallet_address:
+        console.print("[red]No wallet address available. Please try again.[/red]")
         sys.exit(1)
     
-    # Get desired SOL amount
-    sol_amount = get_sol_amount()
-    lamports_amount = int(sol_amount * 1_000_000_000)
-    
-    # Show airdrop instructions
-    console.print(f"\n[yellow]Make sure you have at least {sol_amount} SOL in your wallet before continuing.[/yellow]")
-    console.print(f"Run this command to airdrop SOL (you may need to run multiple times):")
-    console.print(f"[cyan]solana airdrop {sol_amount} {wallet.pubkey()} --url devnet[/cyan]")
-    
-    # Additional helpful information
-    console.print("\n[yellow]Tips:[/yellow]")
-    console.print("1. If airdrop fails, try smaller amounts (0.001 SOL)")
-    console.print("2. You can use multiple airdrops to reach your target amount")
-    console.print("3. Check your balance with:")
-    console.print(f"[cyan]solana balance {wallet.pubkey()} --url devnet[/cyan]")
-    
-    # Wait for user to get SOL
-    input("\nPress Enter after you have airdropped SOL to continue...")
-    
-    # Run the demo
-    async def run_demo():
-        ticket_system = TicketSystem()
-        client = ticket_system.client
-        balance = await check_wallet_balance(client, wallet.pubkey())
-        
-        if balance < lamports_amount:
-            console.print(f"\n[red]Insufficient balance: {balance/1_000_000_000} SOL[/red]")
-            console.print(f"[red]Required balance: {sol_amount} SOL[/red]")
-            await ticket_system.close()
-            return
-            
-        await demonstrate_ticket_systems(wallet)
-    
-    asyncio.run(run_demo()) 
+    # Run the demo with the wallet address
+    asyncio.run(demonstrate_ticket_systems(wallet_address)) 

@@ -2,15 +2,16 @@ import asyncio
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solana.rpc.async_api import AsyncClient
-from solana.rpc.commitment import Commitment
 from solana.transaction import Transaction
 from solders.system_program import TransferParams, transfer
+from solana.rpc.commitment import Commitment
 import struct
 from datetime import datetime
 
 class TicketSystem:
     def __init__(self, rpc_url="https://api.devnet.solana.com"):
-        self.client = AsyncClient(rpc_url, commitment="confirmed")
+        """Initialize ticket system with Solana client"""
+        self.client = AsyncClient(rpc_url, commitment="confirmed")  # Use string instead of enum
         
     async def check_wallet_balance(self, pubkey: Pubkey):
         """Check if wallet has enough SOL"""
@@ -34,10 +35,12 @@ class TicketSystem:
                 }
             
             # Make sure wallet has enough SOL
-            if balance < price + 1000000:  # price + 0.001 SOL for fees
+            # Only need price + minimal fee (0.0001 SOL for fees)
+            min_required = price + 100_000  # price + 0.0001 SOL for fees
+            if balance < min_required:
                 return {
                     "success": False,
-                    "error": f"Insufficient balance. Wallet has {balance/1000000000} SOL, needs at least {(price + 1000000)/1000000000} SOL"
+                    "error": f"Insufficient balance. Wallet has {balance/1_000_000_000} SOL, needs at least {min_required/1_000_000_000} SOL"
                 }
             
             # Create ticket account
@@ -59,12 +62,21 @@ class TicketSystem:
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction
+            # Send transaction with proper options
+            opts = {
+                "skip_preflight": True,
+                "preflight_commitment": "confirmed",
+                "encoding": "base64"
+            }
+            
             result = await self.client.send_transaction(
                 transaction,
                 owner,
-                opts={"skip_preflight": True}
+                opts=opts
             )
+            
+            # Wait for confirmation
+            await self.client.confirm_transaction(result.value)
             
             return {
                 "success": True,
@@ -124,12 +136,21 @@ class TicketSystem:
             recent_blockhash = await self.client.get_latest_blockhash()
             transaction.recent_blockhash = recent_blockhash.value.blockhash
             
-            # Send transaction
+            # Send transaction with proper options
+            opts = {
+                "skip_preflight": True,
+                "preflight_commitment": "confirmed",
+                "encoding": "base64"
+            }
+            
             result = await self.client.send_transaction(
                 transaction,
                 user,
-                opts={"skip_preflight": True}
+                opts=opts
             )
+            
+            # Wait for confirmation
+            await self.client.confirm_transaction(result.value)
             
             return {"success": True, "transaction_id": result.value}
             
